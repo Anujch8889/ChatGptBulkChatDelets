@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>ChatGPT Bulk Deleter</title>
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <div class="container">
+    <h1>🗑️ Bulk Delete</h1>
+    <p class="subtitle">ChatGPT Chats</p>
+    
+    <div id="status" class="status"></div>
+    
+    <div class="button-group">
+      <button id="selectAll" class="btn btn-primary">
+        <span class="icon">☑️</span> Select All Chats
+      </button>
+      
+      <button id="deselectAll" class="btn btn-secondary">
+        <span class="icon">⬜</span> Deselect All
+      </button>
+      
+      <button id="deleteSelected" class="btn btn-danger">
+        <span class="icon">🗑️</span> Delete Selected
+      </button>
+    </div>
+    
+    <div id="progress" class="progress-container" style="display: none;">
+      <div class="progress-bar">
+        <div id="progressFill" class="progress-fill"></div>
+      </div>
+      <p id="progressText" class="progress-text">Deleting... 0/0</p>
+    </div>
+    
+    <p class="footer">Open ChatGPT sidebar first!</p>
+  </div>
+  
+  <script src="popup.js"></script>
+</body>
+</html>

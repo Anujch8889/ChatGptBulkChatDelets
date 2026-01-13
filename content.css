@@ -1,0 +1,27 @@
+/* Bulk Delete Checkbox Styles */
+.bulk-delete-checkbox {
+    width: 18px;
+    height: 18px;
+    margin-right: 8px;
+    cursor: pointer;
+    accent-color: #ff4757;
+    flex-shrink: 0;
+    z-index: 100;
+    position: relative;
+}
+
+.bulk-delete-checkbox:hover {
+    transform: scale(1.1);
+}
+
+/* Selected chat highlight */
+.bulk-selected {
+    background: rgba(255, 71, 87, 0.15) !important;
+    border-left: 3px solid #ff4757 !important;
+}
+
+/* Make sure checkbox is visible */
+nav ol>li>div>a {
+    display: flex !important;
+    align-items: center !important;
+}
