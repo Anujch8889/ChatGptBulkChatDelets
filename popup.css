@@ -1,4 +1,4 @@
-/* ChatGPT Bulk Delete - Modern Popup Styles */
+/* ChatGPT Bulk Delete - Modern Popup Styles v2.2 */
 * {
   margin: 0;
   padding: 0;
@@ -52,6 +52,11 @@ body {
   border: 1px solid rgba(255, 255, 255, 0.06);
 }
 
+.section-danger {
+  background: rgba(220, 53, 69, 0.08);
+  border: 1px solid rgba(220, 53, 69, 0.3);
+}
+
 .section-title {
   font-size: 11px;
   font-weight: 600;
@@ -60,6 +65,14 @@ body {
   letter-spacing: 1px;
   margin-bottom: 12px;
   text-align: center;
+}
+
+.section-warning {
+  font-size: 10px;
+  color: #ffb74d;
+  text-align: center;
+  margin-bottom: 12px;
+  font-style: italic;
 }
 
 /* Button Styles */
@@ -145,6 +158,24 @@ body {
 .btn-red {
   background: linear-gradient(135deg, #c75b5b 0%, #b74747 100%);
   color: white;
+}
+
+/* Lifetime Operation Buttons - Darker/More Serious Colors */
+.btn-purple-dark {
+  background: linear-gradient(135deg, #5e35b1 0%, #4527a0 100%);
+  color: white;
+  border: 1px solid rgba(126, 87, 194, 0.5);
+}
+
+.btn-red-dark {
+  background: linear-gradient(135deg, #c62828 0%, #b71c1c 100%);
+  color: white;
+  border: 1px solid rgba(244, 67, 54, 0.5);
+}
+
+.btn-red-dark:hover {
+  background: linear-gradient(135deg, #d32f2f 0%, #c62828 100%);
+  box-shadow: 0 4px 16px rgba(244, 67, 54, 0.4);
 }
 
 /* Status Styles */
