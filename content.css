@@ -1,27 +1,37 @@
-/* Bulk Delete Checkbox Styles */
-.bulk-delete-checkbox {
-    width: 18px;
-    height: 18px;
-    margin-right: 8px;
-    cursor: pointer;
-    accent-color: #ff4757;
-    flex-shrink: 0;
+/* ChatGPT Bulk Delete - Content Script Styles */
+
+.bulk-delete-checkbox-wrapper {
+    position: absolute;
+    left: 4px;
+    top: 50%;
+    transform: translateY(-50%);
     z-index: 100;
-    position: relative;
+    display: flex;
+    align-items: center;
+    padding: 2px;
+    border-radius: 4px;
+    transition: background-color 0.2s ease;
 }
 
-.bulk-delete-checkbox:hover {
-    transform: scale(1.1);
+.bulk-delete-checkbox-wrapper:hover {
+    background-color: rgba(124, 77, 255, 0.1);
+}
+
+.bulk-delete-checkbox {
+    width: 16px;
+    height: 16px;
+    cursor: pointer;
+    accent-color: #7c4dff;
+    margin: 0;
+    border-radius: 3px;
+}
+
+.bulk-delete-checkbox:focus {
+    outline: 2px solid #7c4dff;
+    outline-offset: 2px;
 }
 
 /* Selected chat highlight */
 .bulk-selected {
-    background: rgba(255, 71, 87, 0.15) !important;
-    border-left: 3px solid #ff4757 !important;
-}
-
-/* Make sure checkbox is visible */
-nav ol>li>div>a {
-    display: flex !important;
-    align-items: center !important;
+    background-color: rgba(124, 77, 255, 0.15) !important;
 }

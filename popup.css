@@ -1,3 +1,4 @@
+/* ChatGPT Bulk Delete - Modern Popup Styles */
 * {
   margin: 0;
   padding: 0;
@@ -5,63 +6,67 @@
 }
 
 body {
-  font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-  background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
-  min-width: 280px;
-  color: #fff;
+  font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+  width: 320px;
+  background: linear-gradient(145deg, #2a2a2a 0%, #1a1a1a 100%);
+  color: #ffffff;
 }
 
 .container {
   padding: 20px;
-  text-align: center;
 }
 
-h1 {
-  font-size: 1.4rem;
-  margin-bottom: 4px;
-  background: linear-gradient(90deg, #ff6b6b, #feca57);
+/* Header Styles */
+.header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 20px;
+  padding-bottom: 15px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.title {
+  font-size: 18px;
+  font-weight: 600;
+  background: linear-gradient(135deg, #4fc3f7 0%, #7c4dff 100%);
   -webkit-background-clip: text;
   -webkit-text-fill-color: transparent;
   background-clip: text;
 }
 
-.subtitle {
-  color: #a0a0a0;
-  font-size: 0.85rem;
-  margin-bottom: 16px;
+.version {
+  font-size: 11px;
+  color: #888;
+  padding: 2px 8px;
+  background: rgba(255, 255, 255, 0.05);
+  border-radius: 10px;
 }
 
-.status {
-  background: rgba(255, 255, 255, 0.1);
-  border-radius: 8px;
-  padding: 10px;
-  margin-bottom: 16px;
-  font-size: 0.85rem;
-  min-height: 40px;
+/* Section Styles */
+.section {
+  background: rgba(255, 255, 255, 0.03);
+  border-radius: 12px;
+  padding: 15px;
+  margin-bottom: 15px;
+  border: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.section-title {
+  font-size: 11px;
+  font-weight: 600;
+  color: #888;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  margin-bottom: 12px;
+  text-align: center;
+}
+
+/* Button Styles */
+.button-row {
   display: flex;
-  align-items: center;
-  justify-content: center;
-}
-
-.status.success {
-  background: rgba(46, 213, 115, 0.2);
-  color: #2ed573;
-}
-
-.status.error {
-  background: rgba(255, 71, 87, 0.2);
-  color: #ff4757;
-}
-
-.status.info {
-  background: rgba(30, 144, 255, 0.2);
-  color: #1e90ff;
-}
-
-.button-group {
-  display: flex;
-  flex-direction: column;
   gap: 10px;
+  margin-bottom: 10px;
 }
 
 .btn {
@@ -71,17 +76,30 @@ h1 {
   gap: 8px;
   padding: 12px 16px;
   border: none;
-  border-radius: 10px;
-  font-size: 0.9rem;
-  font-weight: 600;
+  border-radius: 8px;
+  font-size: 13px;
+  font-weight: 500;
   cursor: pointer;
-  transition: all 0.3s ease;
-  width: 100%;
+  transition: all 0.2s ease;
+  flex: 1;
+  position: relative;
+  overflow: hidden;
+}
+
+.btn::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.1) 0%, transparent 100%);
+  pointer-events: none;
 }
 
 .btn:hover {
   transform: translateY(-2px);
-  box-shadow: 0 4px 15px rgba(0, 0, 0, 0.3);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
 }
 
 .btn:active {
@@ -91,56 +109,158 @@ h1 {
 .btn:disabled {
   opacity: 0.5;
   cursor: not-allowed;
-  transform: none;
+  transform: none !important;
 }
 
-.btn-primary {
-  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+.btn-icon {
+  font-size: 14px;
+}
+
+.full-width {
+  width: 100%;
+  margin-top: 10px;
+}
+
+/* Button Colors */
+.btn-teal {
+  background: linear-gradient(135deg, #26a69a 0%, #00897b 100%);
   color: white;
 }
 
-.btn-secondary {
-  background: rgba(255, 255, 255, 0.1);
-  color: #fff;
-  border: 1px solid rgba(255, 255, 255, 0.2);
-}
-
-.btn-danger {
-  background: linear-gradient(135deg, #ff416c 0%, #ff4b2b 100%);
+.btn-gray {
+  background: linear-gradient(135deg, #546e7a 0%, #455a64 100%);
   color: white;
 }
 
-.icon {
-  font-size: 1rem;
+.btn-gold {
+  background: linear-gradient(135deg, #c9a227 0%, #a68821 100%);
+  color: white;
 }
 
+.btn-purple {
+  background: linear-gradient(135deg, #7e57c2 0%, #5e35b1 100%);
+  color: white;
+}
+
+.btn-red {
+  background: linear-gradient(135deg, #c75b5b 0%, #b74747 100%);
+  color: white;
+}
+
+/* Status Styles */
+.status {
+  text-align: center;
+  padding: 10px;
+  font-size: 12px;
+  color: #888;
+  min-height: 20px;
+}
+
+.status.success {
+  color: #4caf50;
+}
+
+.status.error {
+  color: #f44336;
+}
+
+.status.info {
+  color: #4fc3f7;
+}
+
+.status.warning {
+  color: #ffb74d;
+}
+
+/* Progress Bar Styles */
 .progress-container {
-  margin-top: 16px;
+  margin-top: 10px;
+  padding: 10px;
+  background: rgba(255, 255, 255, 0.03);
+  border-radius: 8px;
 }
 
 .progress-bar {
-  background: rgba(255, 255, 255, 0.1);
-  border-radius: 10px;
   height: 8px;
+  background: rgba(255, 255, 255, 0.1);
+  border-radius: 4px;
   overflow: hidden;
 }
 
 .progress-fill {
-  background: linear-gradient(90deg, #ff416c, #ff4b2b);
   height: 100%;
   width: 0%;
+  background: linear-gradient(90deg, #4fc3f7 0%, #7c4dff 100%);
+  border-radius: 4px;
   transition: width 0.3s ease;
-  border-radius: 10px;
 }
 
 .progress-text {
-  color: #a0a0a0;
-  font-size: 0.8rem;
-  margin-top: 8px;
+  display: block;
+  text-align: center;
+  font-size: 11px;
+  color: #888;
+  margin-top: 6px;
 }
 
+/* Footer Styles */
 .footer {
-  margin-top: 16px;
-  font-size: 0.75rem;
-  color: #666;
+  display: flex;
+  justify-content: center;
+  gap: 20px;
+  margin-top: 15px;
+  padding-top: 15px;
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.social-link {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: #888;
+  text-decoration: none;
+  font-size: 12px;
+  padding: 8px 12px;
+  border-radius: 20px;
+  background: rgba(255, 255, 255, 0.03);
+  transition: all 0.2s ease;
+}
+
+.social-link:hover {
+  background: rgba(255, 255, 255, 0.08);
+  color: #fff;
+}
+
+.social-link.github:hover {
+  color: #fff;
+}
+
+.social-link.instagram:hover {
+  color: #e1306c;
+}
+
+.social-link svg {
+  opacity: 0.8;
+}
+
+.social-link:hover svg {
+  opacity: 1;
+}
+
+/* Scrollbar Styles */
+::-webkit-scrollbar {
+  width: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.2);
+  border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.3);
 }

@@ -1,188 +1,362 @@
-// ChatGPT Bulk Deleter - Content Script
+// ChatGPT Bulk Delete - Content Script v2.0
+// Uses ChatGPT API for reliable delete/archive operations
+
 (function () {
-    let selectedChats = new Set();
+    'use strict';
 
-    // Create checkbox for each chat item
-    function addCheckboxes() {
-        const chatItems = document.querySelectorAll('nav ol > li > div > a');
+    let selectedChats = new Map(); // Map of conversationId -> chatElement
+    let checkboxesVisible = false;
 
-        chatItems.forEach((item, index) => {
-            if (item.querySelector('.bulk-delete-checkbox')) return;
+    // ===========================================
+    // SELECTORS - Updated for current ChatGPT DOM
+    // ===========================================
 
-            const checkbox = document.createElement('input');
-            checkbox.type = 'checkbox';
-            checkbox.className = 'bulk-delete-checkbox';
-            checkbox.dataset.index = index;
+    // Chat items are links that start with /c/ (conversation links)
+    const CHAT_ITEM_SELECTOR = 'a[href^="/c/"]';
 
-            checkbox.addEventListener('change', (e) => {
-                e.stopPropagation();
-                if (checkbox.checked) {
-                    selectedChats.add(item);
-                    item.classList.add('bulk-selected');
-                } else {
-                    selectedChats.delete(item);
-                    item.classList.remove('bulk-selected');
-                }
-            });
+    // The sidebar nav container
+    const SIDEBAR_SELECTOR = 'nav';
 
-            checkbox.addEventListener('click', (e) => {
-                e.stopPropagation();
-            });
+    // ===========================================
+    // UTILITY FUNCTIONS
+    // ===========================================
 
-            item.style.position = 'relative';
-            item.insertBefore(checkbox, item.firstChild);
-        });
-    }
-
-    // Select all visible chats
-    function selectAll() {
-        const checkboxes = document.querySelectorAll('.bulk-delete-checkbox');
-        checkboxes.forEach(cb => {
-            cb.checked = true;
-            const chatItem = cb.closest('a');
-            if (chatItem) {
-                selectedChats.add(chatItem);
-                chatItem.classList.add('bulk-selected');
-            }
-        });
-        return { count: selectedChats.size };
-    }
-
-    // Deselect all
-    function deselectAll() {
-        const checkboxes = document.querySelectorAll('.bulk-delete-checkbox');
-        checkboxes.forEach(cb => {
-            cb.checked = false;
-            const chatItem = cb.closest('a');
-            if (chatItem) {
-                chatItem.classList.remove('bulk-selected');
-            }
-        });
-        selectedChats.clear();
-        return { success: true };
-    }
-
-    // Get selected count
-    function getSelectedCount() {
-        return { count: selectedChats.size };
-    }
-
-    // Helper function to wait
     function wait(ms) {
         return new Promise(resolve => setTimeout(resolve, ms));
     }
 
-    // Delete a single chat
-    async function deleteSingleChat(chatItem) {
-        try {
-            // Click on the chat to select it
-            chatItem.click();
-            await wait(500);
+    function getConversationIdFromElement(element) {
+        const href = element.getAttribute('href');
+        if (href && href.startsWith('/c/')) {
+            return href.replace('/c/', '').split('?')[0];
+        }
+        return null;
+    }
 
-            // Find and click the 3-dot menu button
-            const menuButton = chatItem.querySelector('button[data-state]') ||
-                chatItem.parentElement.querySelector('button');
+    function getAccessToken() {
+        // Try to get the access token from the page
+        return new Promise((resolve) => {
+            // Method 1: Try to get from session storage or cookies
+            const cookies = document.cookie;
 
-            if (!menuButton) {
-                // Try hovering to reveal menu
-                chatItem.dispatchEvent(new MouseEvent('mouseenter', { bubbles: true }));
-                await wait(300);
-            }
-
-            // Look for menu button again after hover
-            const allButtons = chatItem.querySelectorAll('button');
-            for (const btn of allButtons) {
-                btn.click();
-                await wait(300);
-
-                // Look for delete option in dropdown
-                const deleteOption = document.querySelector('[role="menuitem"]');
-                const menuItems = document.querySelectorAll('[role="menuitem"]');
-
-                for (const menuItem of menuItems) {
-                    if (menuItem.textContent.toLowerCase().includes('delete')) {
-                        menuItem.click();
-                        await wait(300);
-
-                        // Confirm deletion if there's a confirmation modal
-                        const confirmBtn = document.querySelector('button[class*="danger"]') ||
-                            document.querySelector('button.btn-danger') ||
-                            Array.from(document.querySelectorAll('button')).find(b =>
-                                b.textContent.toLowerCase().includes('delete') &&
-                                b.closest('[role="dialog"]')
-                            );
-
-                        if (confirmBtn) {
-                            confirmBtn.click();
-                            await wait(500);
-                        }
-                        return true;
+            // Method 2: Fetch from the session endpoint
+            fetch('https://chatgpt.com/api/auth/session', {
+                credentials: 'include'
+            })
+                .then(res => res.json())
+                .then(data => {
+                    if (data.accessToken) {
+                        resolve(data.accessToken);
+                    } else {
+                        resolve(null);
                     }
+                })
+                .catch(() => resolve(null));
+        });
+    }
+
+    // ===========================================
+    // CHECKBOX MANAGEMENT
+    // ===========================================
+
+    function addCheckboxes() {
+        const chatItems = document.querySelectorAll(CHAT_ITEM_SELECTOR);
+        let count = 0;
+
+        chatItems.forEach((item) => {
+            // Skip if already has checkbox
+            if (item.querySelector('.bulk-delete-checkbox')) return;
+
+            const conversationId = getConversationIdFromElement(item);
+            if (!conversationId) return;
+
+            // Create checkbox container
+            const checkboxWrapper = document.createElement('div');
+            checkboxWrapper.className = 'bulk-delete-checkbox-wrapper';
+            checkboxWrapper.style.cssText = `
+                position: absolute;
+                left: 4px;
+                top: 50%;
+                transform: translateY(-50%);
+                z-index: 100;
+                display: flex;
+                align-items: center;
+            `;
+
+            // Create checkbox
+            const checkbox = document.createElement('input');
+            checkbox.type = 'checkbox';
+            checkbox.className = 'bulk-delete-checkbox';
+            checkbox.dataset.conversationId = conversationId;
+            checkbox.style.cssText = `
+                width: 16px;
+                height: 16px;
+                cursor: pointer;
+                accent-color: #7c4dff;
+                margin: 0;
+            `;
+
+            // Handle checkbox change
+            checkbox.addEventListener('change', (e) => {
+                e.stopPropagation();
+                if (checkbox.checked) {
+                    selectedChats.set(conversationId, item);
+                    item.style.backgroundColor = 'rgba(124, 77, 255, 0.15)';
+                } else {
+                    selectedChats.delete(conversationId);
+                    item.style.backgroundColor = '';
+                }
+            });
+
+            // Prevent click from navigating
+            checkbox.addEventListener('click', (e) => {
+                e.stopPropagation();
+                e.preventDefault();
+            });
+
+            checkboxWrapper.addEventListener('click', (e) => {
+                e.stopPropagation();
+                e.preventDefault();
+            });
+
+            // Add padding to chat item for checkbox
+            item.style.position = 'relative';
+            item.style.paddingLeft = '28px';
+
+            checkboxWrapper.appendChild(checkbox);
+            item.insertBefore(checkboxWrapper, item.firstChild);
+            count++;
+        });
+
+        checkboxesVisible = true;
+        return { success: true, count };
+    }
+
+    function removeCheckboxes() {
+        const checkboxes = document.querySelectorAll('.bulk-delete-checkbox-wrapper');
+        checkboxes.forEach(wrapper => {
+            const item = wrapper.parentElement;
+            if (item) {
+                item.style.paddingLeft = '';
+                item.style.backgroundColor = '';
+            }
+            wrapper.remove();
+        });
+
+        selectedChats.clear();
+        checkboxesVisible = false;
+        return { success: true };
+    }
+
+    function toggleAllCheckboxes() {
+        const checkboxes = document.querySelectorAll('.bulk-delete-checkbox');
+        const allChecked = Array.from(checkboxes).every(cb => cb.checked);
+
+        checkboxes.forEach(checkbox => {
+            const conversationId = checkbox.dataset.conversationId;
+            const item = checkbox.closest('a');
+
+            if (allChecked) {
+                // Uncheck all
+                checkbox.checked = false;
+                selectedChats.delete(conversationId);
+                if (item) item.style.backgroundColor = '';
+            } else {
+                // Check all
+                checkbox.checked = true;
+                if (item) {
+                    selectedChats.set(conversationId, item);
+                    item.style.backgroundColor = 'rgba(124, 77, 255, 0.15)';
                 }
             }
+        });
+
+        return { selected: selectedChats.size };
+    }
+
+    function getSelectedCount() {
+        return { count: selectedChats.size };
+    }
+
+    // ===========================================
+    // API OPERATIONS
+    // ===========================================
+
+    async function archiveConversation(conversationId, accessToken) {
+        try {
+            const response = await fetch(`https://chatgpt.com/backend-api/conversation/${conversationId}`, {
+                method: 'PATCH',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${accessToken}`
+                },
+                credentials: 'include',
+                body: JSON.stringify({ is_archived: true })
+            });
+
+            return response.ok;
+        } catch (error) {
+            console.error('Archive error:', error);
             return false;
+        }
+    }
+
+    async function deleteConversation(conversationId, accessToken) {
+        try {
+            const response = await fetch(`https://chatgpt.com/backend-api/conversation/${conversationId}`, {
+                method: 'PATCH',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${accessToken}`
+                },
+                credentials: 'include',
+                body: JSON.stringify({ is_visible: false })
+            });
+
+            return response.ok;
         } catch (error) {
             console.error('Delete error:', error);
             return false;
         }
     }
 
-    // Delete all selected chats
-    async function deleteSelected() {
-        const chatsToDelete = Array.from(selectedChats);
-        let deleted = 0;
-
-        for (const chat of chatsToDelete) {
-            const success = await deleteSingleChat(chat);
-            if (success) {
-                deleted++;
-                selectedChats.delete(chat);
-            }
-            await wait(1000); // Wait between deletions
+    async function bulkArchive() {
+        const accessToken = await getAccessToken();
+        if (!accessToken) {
+            return { success: 0, failed: selectedChats.size, total: selectedChats.size, processed: 0, error: 'Could not get access token. Please refresh the page.' };
         }
 
-        return { deleted, total: chatsToDelete.length };
+        const conversations = Array.from(selectedChats.entries());
+        let success = 0;
+        let processed = 0;
+
+        for (const [conversationId, element] of conversations) {
+            const result = await archiveConversation(conversationId, accessToken);
+            processed++;
+
+            if (result) {
+                success++;
+                // Remove the element from DOM
+                if (element && element.parentElement) {
+                    element.parentElement.remove();
+                }
+                selectedChats.delete(conversationId);
+            }
+
+            // Small delay to avoid rate limiting
+            await wait(300);
+        }
+
+        return {
+            success,
+            failed: conversations.length - success,
+            total: conversations.length,
+            processed
+        };
     }
 
-    // Listen for messages from popup
-    chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
-        addCheckboxes(); // Refresh checkboxes
+    async function bulkDelete() {
+        const accessToken = await getAccessToken();
+        if (!accessToken) {
+            return { success: 0, failed: selectedChats.size, total: selectedChats.size, processed: 0, error: 'Could not get access token. Please refresh the page.' };
+        }
 
+        const conversations = Array.from(selectedChats.entries());
+        let success = 0;
+        let processed = 0;
+
+        for (const [conversationId, element] of conversations) {
+            const result = await deleteConversation(conversationId, accessToken);
+            processed++;
+
+            if (result) {
+                success++;
+                // Remove the element from DOM
+                if (element && element.parentElement) {
+                    element.parentElement.remove();
+                }
+                selectedChats.delete(conversationId);
+            }
+
+            // Small delay to avoid rate limiting
+            await wait(300);
+        }
+
+        return {
+            success,
+            failed: conversations.length - success,
+            total: conversations.length,
+            processed
+        };
+    }
+
+    // ===========================================
+    // MESSAGE LISTENER
+    // ===========================================
+
+    chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         switch (request.action) {
-            case 'selectAll':
-                sendResponse(selectAll());
+            case 'addCheckboxes':
+                sendResponse(addCheckboxes());
                 break;
-            case 'deselectAll':
-                sendResponse(deselectAll());
+            case 'removeCheckboxes':
+                sendResponse(removeCheckboxes());
+                break;
+            case 'toggleAll':
+                sendResponse(toggleAllCheckboxes());
                 break;
             case 'getSelectedCount':
                 sendResponse(getSelectedCount());
                 break;
-            case 'deleteSelected':
-                deleteSelected().then(sendResponse);
+            case 'bulkArchive':
+                bulkArchive().then(sendResponse);
                 return true; // Keep channel open for async response
+            case 'bulkDelete':
+                bulkDelete().then(sendResponse);
+                return true; // Keep channel open for async response
+            default:
+                sendResponse({ error: 'Unknown action' });
         }
     });
 
-    // Initialize checkboxes when page loads
-    function init() {
-        addCheckboxes();
+    // ===========================================
+    // MUTATION OBSERVER
+    // ===========================================
 
-        // Watch for DOM changes (lazy loading of chats)
+    function setupObserver() {
+        const nav = document.querySelector(SIDEBAR_SELECTOR);
+        if (!nav) return;
+
         const observer = new MutationObserver(() => {
-            setTimeout(addCheckboxes, 500);
+            if (checkboxesVisible) {
+                // Re-add checkboxes to new chat items
+                setTimeout(() => addCheckboxes(), 500);
+            }
         });
 
-        const nav = document.querySelector('nav');
-        if (nav) {
-            observer.observe(nav, { childList: true, subtree: true });
-        }
+        observer.observe(nav, { childList: true, subtree: true });
     }
 
-    // Run when DOM is ready
+    // Initialize observer when DOM is ready
     if (document.readyState === 'loading') {
-        document.addEventListener('DOMContentLoaded', init);
+        document.addEventListener('DOMContentLoaded', setupObserver);
     } else {
-        init();
+        setupObserver();
     }
+
+    // Add some global styles
+    const style = document.createElement('style');
+    style.textContent = `
+        .bulk-delete-checkbox:focus {
+            outline: 2px solid #7c4dff;
+            outline-offset: 2px;
+        }
+        .bulk-delete-checkbox-wrapper:hover {
+            background: rgba(124, 77, 255, 0.1);
+            border-radius: 4px;
+        }
+    `;
+    document.head.appendChild(style);
+
+    console.log('ChatGPT Bulk Delete v2.0 loaded');
 })();
