@@ -229,9 +229,9 @@
                 credentials: 'include',
                 body: JSON.stringify({ is_archived: true })
             });
-            return response.ok;
+            return { success: response.ok, status: response.status };
         } catch (error) {
-            return false;
+            return { success: false, status: 0 };
         }
     }
 
@@ -246,10 +246,58 @@
                 credentials: 'include',
                 body: JSON.stringify({ is_visible: false })
             });
-            return response.ok;
+            return { success: response.ok, status: response.status };
         } catch (error) {
-            return false;
+            return { success: false, status: 0 };
         }
+    }
+
+    // ===========================================
+    // BATCH PROCESSING HELPER
+    // ===========================================
+
+    const BATCH_SIZE = 10; // Safe Speed
+    const BATCH_DELAY = 300; // Safe Delay
+    const COOLDOWN_DELAY = 10000; // 10 Seconds Cooldown on 429
+
+    async function processInBatches(items, batchSize, asyncFn, onProgress) {
+        let success = 0;
+        let processed = 0;
+        const total = items.length;
+        const failedItems = [];
+
+        for (let i = 0; i < total; i += batchSize) {
+            const batch = items.slice(i, i + batchSize);
+            const promises = batch.map(item => asyncFn(item));
+
+            const results = await Promise.all(promises);
+            let rateLimitHit = false;
+
+            results.forEach((result, index) => {
+                processed++;
+                if (result.success) {
+                    success++;
+                } else {
+                    failedItems.push(batch[index]);
+                    if (result.status === 429) {
+                        rateLimitHit = true;
+                    }
+                }
+            });
+
+            if (onProgress) {
+                onProgress(processed, success, total);
+            }
+
+            if (rateLimitHit) {
+                console.warn('[BulkDelete] Rate limit (429) hit. Pausing for 10 seconds...');
+                await wait(COOLDOWN_DELAY);
+            } else {
+                await wait(BATCH_DELAY);
+            }
+        }
+
+        return { success, failed: total - success, total, processed, failedItems };
     }
 
     // ===========================================
@@ -266,23 +314,22 @@
             return { success: 0, failed: selectedChats.size, total: selectedChats.size, processed: 0, error: 'Could not get access token' };
         }
 
-        const conversations = Array.from(selectedChats.entries());
-        let success = 0;
-        let processed = 0;
+        const conversations = Array.from(selectedChats.entries()); // [[id, element], [id, element]...]
 
-        for (const [conversationId, element] of conversations) {
-            const result = await archiveConversation(conversationId, accessToken);
-            processed++;
-
-            if (result) {
-                success++;
-                if (element && element.parentElement) {
-                    element.parentElement.remove();
+        const { success, processed } = await processInBatches(
+            conversations,
+            BATCH_SIZE,
+            async ([conversationId, element]) => {
+                const result = await archiveConversation(conversationId, accessToken);
+                if (result.success) {
+                    if (element && element.parentElement) {
+                        element.parentElement.remove();
+                    }
+                    selectedChats.delete(conversationId);
                 }
-                selectedChats.delete(conversationId);
+                return result;
             }
-            await wait(300);
-        }
+        );
 
         isProcessing = false;
         return { success, failed: conversations.length - success, total: conversations.length, processed };
@@ -299,22 +346,21 @@
         }
 
         const conversations = Array.from(selectedChats.entries());
-        let success = 0;
-        let processed = 0;
 
-        for (const [conversationId, element] of conversations) {
-            const result = await deleteConversation(conversationId, accessToken);
-            processed++;
-
-            if (result) {
-                success++;
-                if (element && element.parentElement) {
-                    element.parentElement.remove();
+        const { success, processed } = await processInBatches(
+            conversations,
+            BATCH_SIZE,
+            async ([conversationId, element]) => {
+                const result = await deleteConversation(conversationId, accessToken);
+                if (result.success) {
+                    if (element && element.parentElement) {
+                        element.parentElement.remove();
+                    }
+                    selectedChats.delete(conversationId);
                 }
-                selectedChats.delete(conversationId);
+                return result;
             }
-            await wait(300);
-        }
+        );
 
         isProcessing = false;
         return { success, failed: conversations.length - success, total: conversations.length, processed };
@@ -345,29 +391,24 @@
             return { success: 0, failed: 0, total: 0, error: 'No conversations found' };
         }
 
-        let success = 0;
-        let processed = 0;
-
-        for (const conversation of allConversations) {
-            const conversationId = conversation.id;
-            const result = await deleteConversation(conversationId, accessToken);
-            processed++;
-
-            if (result) success++;
-
-            // Send progress update
-            if (sendProgress) {
-                sendProgress({
-                    status: 'processing',
-                    processed,
-                    total,
-                    success,
-                    percent: Math.round((processed / total) * 100)
-                });
+        const { success, processed } = await processInBatches(
+            allConversations,
+            BATCH_SIZE,
+            async (conversation) => {
+                return await deleteConversation(conversation.id, accessToken);
+            },
+            (processedCount, successCount, totalCount) => {
+                if (sendProgress) {
+                    sendProgress({
+                        status: 'processing',
+                        processed: processedCount,
+                        total: totalCount,
+                        success: successCount,
+                        percent: Math.round((processedCount / totalCount) * 100)
+                    });
+                }
             }
-
-            await wait(200);
-        }
+        );
 
         // Refresh the page
         if (success > 0) {
@@ -399,28 +440,24 @@
             return { success: 0, failed: 0, total: 0, error: 'No conversations found' };
         }
 
-        let success = 0;
-        let processed = 0;
-
-        for (const conversation of allConversations) {
-            const conversationId = conversation.id;
-            const result = await archiveConversation(conversationId, accessToken);
-            processed++;
-
-            if (result) success++;
-
-            if (sendProgress) {
-                sendProgress({
-                    status: 'processing',
-                    processed,
-                    total,
-                    success,
-                    percent: Math.round((processed / total) * 100)
-                });
+        const { success, processed } = await processInBatches(
+            allConversations,
+            BATCH_SIZE,
+            async (conversation) => {
+                return await archiveConversation(conversation.id, accessToken);
+            },
+            (processedCount, successCount, totalCount) => {
+                if (sendProgress) {
+                    sendProgress({
+                        status: 'processing',
+                        processed: processedCount,
+                        total: totalCount,
+                        success: successCount,
+                        percent: Math.round((processedCount / totalCount) * 100)
+                    });
+                }
             }
-
-            await wait(200);
-        }
+        );
 
         if (success > 0) {
             if (sendProgress) sendProgress({ status: 'refreshing', success, total });
