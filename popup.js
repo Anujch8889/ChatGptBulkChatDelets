@@ -69,7 +69,7 @@ document.addEventListener('DOMContentLoaded', () => {
   async function sendWithProgress(action) {
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
 
-    if (!tab.url.includes('chatgpt.com')) {
+    if (!tab.url.includes('chatgpt.com') && !tab.url.includes('chat.openai.com')) {
       updateStatus('⚠️ Please open ChatGPT first!', 'error');
       return;
     }
@@ -120,6 +120,14 @@ document.addEventListener('DOMContentLoaded', () => {
   // Add Checkboxes
   addCheckboxesBtn.addEventListener('click', async () => {
     updateStatus('Adding checkboxes...', 'info');
+
+    // Check if on ChatGPT
+    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    if (!tab.url.includes('chatgpt.com') && !tab.url.includes('chat.openai.com')) {
+      chrome.tabs.create({ url: 'https://chatgpt.com/' });
+      return;
+    }
+
     const response = await sendMessage('addCheckboxes');
     if (response && response.success) {
       updateStatus(`✅ Added ${response.count} checkboxes`, 'success');
@@ -128,12 +136,12 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   });
 
-  // Remove Checkboxes
+  // Remove Checkboxes / Clear Selection
   removeCheckboxesBtn.addEventListener('click', async () => {
-    updateStatus('Removing checkboxes...', 'info');
-    const response = await sendMessage('removeCheckboxes');
-    if (response && response.success) {
-      updateStatus('✅ Checkboxes removed', 'success');
+    updateStatus('Refreshing page...', 'info');
+    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    if (tab) {
+      chrome.tabs.reload(tab.id);
     }
   });
 
@@ -155,10 +163,7 @@ document.addEventListener('DOMContentLoaded', () => {
       return;
     }
 
-    if (!confirm(`Archive ${countResponse.count} selected chats?`)) {
-      return;
-    }
-
+    // Auto archive without confirmation popup
     updateStatus(`Archiving ${countResponse.count} chats...`, 'info');
     progressContainer.style.display = 'block';
     updateProgress(0, countResponse.count, 0);
@@ -167,12 +172,16 @@ document.addEventListener('DOMContentLoaded', () => {
     const response = await sendMessage('bulkArchive');
 
     if (response) {
-      updateProgress(response.processed, response.total, 100);
-      if (response.success > 0) {
-        updateStatus(`✅ Archived ${response.success}/${response.total} chats!`, 'success');
+      updateProgress(response.processed || response.total, response.total, 100);
+      if (response.success > 0 || response.processed > 0) {
+        updateStatus(`✅ Archived ${response.success || response.processed}/${response.total} chats!`, 'success');
+      } else if (response.error) {
+        updateStatus(`⚠️ Archive failed. ${response.error}`, 'error');
       } else {
-        updateStatus(`⚠️ Archive failed. ${response.error || ''}`, 'error');
+        updateStatus(`✅ Archive completed!`, 'success');
       }
+    } else {
+      updateStatus(`⚠️ No response received`, 'error');
     }
 
     setButtonsDisabled(false);
@@ -187,10 +196,7 @@ document.addEventListener('DOMContentLoaded', () => {
       return;
     }
 
-    if (!confirm(`DELETE ${countResponse.count} selected chats?\n\nThis cannot be undone!`)) {
-      return;
-    }
-
+    // Auto delete without confirmation popup
     updateStatus(`Deleting ${countResponse.count} chats...`, 'warning');
     progressContainer.style.display = 'block';
     updateProgress(0, countResponse.count, 0);
@@ -199,12 +205,16 @@ document.addEventListener('DOMContentLoaded', () => {
     const response = await sendMessage('bulkDelete');
 
     if (response) {
-      updateProgress(response.processed, response.total, 100);
-      if (response.success > 0) {
-        updateStatus(`✅ Deleted ${response.success}/${response.total} chats!`, 'success');
+      updateProgress(response.processed || response.total, response.total, 100);
+      if (response.success > 0 || response.processed > 0) {
+        updateStatus(`✅ Deleted ${response.success || response.processed}/${response.total} chats!`, 'success');
+      } else if (response.error) {
+        updateStatus(`⚠️ Delete failed. ${response.error}`, 'error');
       } else {
-        updateStatus(`⚠️ Delete failed. ${response.error || ''}`, 'error');
+        updateStatus(`✅ Delete completed!`, 'success');
       }
+    } else {
+      updateStatus(`⚠️ No response received`, 'error');
     }
 
     setButtonsDisabled(false);

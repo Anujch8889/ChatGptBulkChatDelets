@@ -1,8 +1,8 @@
 {
     "manifest_version": 3,
-    "name": "Bulk Delete Chats for ChatGPT - Mass Delete & Archive",
-    "version": "2.3.0",
-    "description": "Delete all ChatGPT conversations at once! Bulk delete, mass archive, select multiple chats with checkboxes. Clear entire chat history instantly. Best ChatGPT chat cleaner & manager.",
+    "name": "Bulk Delete for ChatGPT",
+    "version": "2.6.0",
+    "description": "Delete multiple ChatGPT conversations at once.",
     "permissions": [
         "activeTab",
         "scripting"

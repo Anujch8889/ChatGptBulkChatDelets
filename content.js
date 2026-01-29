@@ -23,8 +23,31 @@
         return null;
     }
 
+    // Store device ID globally
+    let deviceId = null;
+
+    async function getDeviceId() {
+        try {
+            // Try to get from localStorage first
+            const storedId = localStorage.getItem('oai-did');
+            if (storedId) {
+                deviceId = storedId;
+                return deviceId;
+            }
+            // Generate a new UUID if not found
+            deviceId = crypto.randomUUID();
+            return deviceId;
+        } catch (error) {
+            console.error('[BulkDelete] Failed to get device ID:', error);
+            return crypto.randomUUID();
+        }
+    }
+
     async function getAccessToken() {
         try {
+            // Get device ID first
+            await getDeviceId();
+
             const response = await fetch('https://chatgpt.com/api/auth/session', {
                 credentials: 'include'
             });
@@ -56,7 +79,9 @@
                     method: 'GET',
                     headers: {
                         'Authorization': `Bearer ${accessToken}`,
-                        'Content-Type': 'application/json'
+                        'Content-Type': 'application/json',
+                        'oai-device-id': deviceId || '',
+                        'oai-language': 'en-US'
                     },
                     credentials: 'include'
                 });
@@ -150,12 +175,15 @@
 
             checkbox.addEventListener('click', (e) => {
                 e.stopPropagation();
-                e.preventDefault();
+                // removed preventDefault to allow manual checking
             });
 
             checkboxWrapper.addEventListener('click', (e) => {
                 e.stopPropagation();
                 e.preventDefault();
+                // Allow clicking the wrapper to toggle the checkbox
+                checkbox.checked = !checkbox.checked;
+                checkbox.dispatchEvent(new Event('change'));
             });
 
             item.style.position = 'relative';
@@ -224,7 +252,9 @@
                 method: 'PATCH',
                 headers: {
                     'Content-Type': 'application/json',
-                    'Authorization': `Bearer ${accessToken}`
+                    'Authorization': `Bearer ${accessToken}`,
+                    'oai-device-id': deviceId || '',
+                    'oai-language': 'en-US'
                 },
                 credentials: 'include',
                 body: JSON.stringify({ is_archived: true })
@@ -241,7 +271,9 @@
                 method: 'PATCH',
                 headers: {
                     'Content-Type': 'application/json',
-                    'Authorization': `Bearer ${accessToken}`
+                    'Authorization': `Bearer ${accessToken}`,
+                    'oai-device-id': deviceId || '',
+                    'oai-language': 'en-US'
                 },
                 credentials: 'include',
                 body: JSON.stringify({ is_visible: false })
