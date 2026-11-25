@@ -1,7 +1,7 @@
 {
     "manifest_version": 3,
     "name": "Bulk Delete for ChatGPT",
-    "version": "2.6.0",
+    "version": "3.1.0",
     "description": "Delete multiple ChatGPT conversations at once.",
     "permissions": [
         "activeTab",

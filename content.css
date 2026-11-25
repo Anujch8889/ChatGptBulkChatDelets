@@ -1,37 +1,47 @@
 /* ChatGPT Bulk Delete - Content Script Styles */
 
 .bulk-delete-checkbox-wrapper {
-    position: absolute;
-    left: 4px;
-    top: 50%;
-    transform: translateY(-50%);
-    z-index: 100;
-    display: flex;
-    align-items: center;
-    padding: 2px;
-    border-radius: 4px;
-    transition: background-color 0.2s ease;
+    display: inline-flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+    flex-shrink: 0 !important;
+    width: 20px !important;
+    height: 20px !important;
+    margin-right: 8px !important;
+    z-index: 999 !important;
+    cursor: pointer !important;
+    border-radius: 4px !important;
+    position: relative !important;
+    transition: background-color 0.15s ease;
 }
 
 .bulk-delete-checkbox-wrapper:hover {
-    background-color: rgba(124, 77, 255, 0.1);
+    background-color: rgba(16, 163, 127, 0.22) !important;
 }
 
 .bulk-delete-checkbox {
-    width: 16px;
-    height: 16px;
-    cursor: pointer;
-    accent-color: #7c4dff;
-    margin: 0;
-    border-radius: 3px;
+    -webkit-appearance: checkbox !important;
+    appearance: checkbox !important;
+    display: inline-block !important;
+    visibility: visible !important;
+    opacity: 1 !important;
+    width: 15px !important;
+    height: 15px !important;
+    cursor: pointer !important;
+    accent-color: #10a37f !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    pointer-events: auto !important;
+    position: static !important;
 }
 
 .bulk-delete-checkbox:focus {
-    outline: 2px solid #7c4dff;
+    outline: 2px solid #10a37f;
     outline-offset: 2px;
 }
 
 /* Selected chat highlight */
 .bulk-selected {
-    background-color: rgba(124, 77, 255, 0.15) !important;
+    background-color: rgba(16, 163, 127, 0.18) !important;
+    border-radius: 8px !important;
 }

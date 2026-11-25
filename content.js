@@ -1,56 +1,76 @@
-// ChatGPT Bulk Delete - Content Script v2.3
-// Real-time progress updates for lifetime operations
+// ChatGPT Bulk Delete - Content Script v3.1.0
+// Optimized for 1,000 - 10,000+ chats: token refresh on 401, adaptive 429 backoff,
+// O(1) sidebar cleanup, resumable job state, and cancellation support.
 
 (function () {
     'use strict';
 
-    let selectedChats = new Map();
-    let checkboxesVisible = false;
-    let isProcessing = false;
+    if (window.__chatgptBulkDeleteLoaded) {
+        return;
+    }
+    window.__chatgptBulkDeleteLoaded = true;
 
-    const CHAT_ITEM_SELECTOR = 'a[href^="/c/"]';
-    const SIDEBAR_SELECTOR = 'nav';
+    const BASE_URL = window.location.origin;
+    const INITIAL_BATCH_SIZE = 10;
+    const MIN_BATCH_SIZE = 3;
+    const BATCH_DELAY = 250;
+    const DEFAULT_COOLDOWN_MS = 10000;
+
+    let deviceId = null;
+    let activePort = null;
+
+    let jobState = {
+        active: false,
+        action: null,
+        status: 'idle', // idle | fetching | processing | complete | error | cancelled
+        message: '',
+        processed: 0,
+        total: 0,
+        success: 0,
+        failed: 0,
+        percent: 0,
+        cancelled: false,
+        succeededIds: []
+    };
 
     function wait(ms) {
         return new Promise(resolve => setTimeout(resolve, ms));
     }
 
-    function getConversationIdFromElement(element) {
-        const href = element.getAttribute('href');
-        if (href && href.startsWith('/c/')) {
-            return href.replace('/c/', '').split('?')[0];
+    function emitProgress(update) {
+        Object.assign(jobState, update);
+        if (activePort) {
+            try {
+                activePort.postMessage({ ...jobState });
+            } catch (e) {
+                activePort = null;
+            }
         }
-        return null;
     }
-
-    // Store device ID globally
-    let deviceId = null;
 
     async function getDeviceId() {
         try {
-            // Try to get from localStorage first
             const storedId = localStorage.getItem('oai-did');
             if (storedId) {
                 deviceId = storedId;
                 return deviceId;
             }
-            // Generate a new UUID if not found
-            deviceId = crypto.randomUUID();
+            if (!deviceId) {
+                deviceId = crypto.randomUUID();
+            }
             return deviceId;
         } catch (error) {
-            console.error('[BulkDelete] Failed to get device ID:', error);
             return crypto.randomUUID();
         }
     }
 
     async function getAccessToken() {
         try {
-            // Get device ID first
             await getDeviceId();
-
-            const response = await fetch('https://chatgpt.com/api/auth/session', {
+            const response = await fetch(`${BASE_URL}/api/auth/session`, {
                 credentials: 'include'
             });
+            if (!response.ok) return null;
             const data = await response.json();
             return data.accessToken || null;
         } catch (error) {
@@ -59,542 +79,375 @@
         }
     }
 
+    function buildHeaders(accessToken) {
+        return {
+            'Authorization': `Bearer ${accessToken}`,
+            'Content-Type': 'application/json',
+            'oai-device-id': deviceId || '',
+            'oai-language': 'en-US'
+        };
+    }
+
+    function getRetryAfterMs(response, attempt) {
+        const retryHeader = response.headers.get('Retry-After');
+        if (retryHeader) {
+            const seconds = Number(retryHeader);
+            if (!Number.isNaN(seconds) && seconds > 0) {
+                return Math.min(seconds * 1000, 60000);
+            }
+        }
+        return Math.min(DEFAULT_COOLDOWN_MS * Math.max(1, attempt), 45000);
+    }
+
     // ===========================================
-    // FETCH ALL CONVERSATIONS
+    // FETCH ALL CONVERSATIONS (10k+ SAFE)
     // ===========================================
 
-    async function fetchAllConversations(accessToken) {
-        let allConversations = [];
+    async function fetchAllConversations() {
+        const accessToken = await getAccessToken();
+        if (!accessToken) {
+            return { error: 'Please sign in to ChatGPT and refresh the page.' };
+        }
+
+        const seenIds = new Set();
+        const allConversations = [];
         let offset = 0;
-        const limit = 28;
+        const limit = 100;
         let hasMore = true;
+        let retryCount = 0;
+        let currentToken = accessToken;
 
-        console.log('[BulkDelete] Starting to fetch all conversations...');
+        emitProgress({
+            active: true,
+            action: 'fetchAll',
+            status: 'fetching',
+            message: 'Loading chats...',
+            processed: 0,
+            total: 0,
+            percent: 10,
+            cancelled: false
+        });
 
         while (hasMore) {
-            try {
-                const url = `https://chatgpt.com/backend-api/conversations?offset=${offset}&limit=${limit}&order=updated`;
+            if (jobState.cancelled) {
+                return { cancelled: true, conversations: allConversations };
+            }
 
+            try {
+                const url = `${BASE_URL}/backend-api/conversations?offset=${offset}&limit=${limit}&order=updated`;
                 const response = await fetch(url, {
                     method: 'GET',
-                    headers: {
-                        'Authorization': `Bearer ${accessToken}`,
-                        'Content-Type': 'application/json',
-                        'oai-device-id': deviceId || '',
-                        'oai-language': 'en-US'
-                    },
+                    headers: buildHeaders(currentToken),
                     credentials: 'include'
                 });
 
+                if (response.status === 401) {
+                    retryCount++;
+                    const refreshed = await getAccessToken();
+                    if (refreshed && retryCount <= 2) {
+                        currentToken = refreshed;
+                        continue;
+                    }
+                    return { error: 'Session expired. Please refresh ChatGPT and try again.' };
+                }
+
+                if (response.status === 429) {
+                    retryCount++;
+                    if (retryCount > 5) {
+                        return { error: `Rate limited by ChatGPT after ${allConversations.length} chats. Please wait a minute and retry.` };
+                    }
+                    const cooldown = getRetryAfterMs(response, retryCount);
+                    emitProgress({
+                        status: 'fetching',
+                        message: `Rate limited. Waiting ${Math.round(cooldown / 1000)}s... (${allConversations.length} loaded)`
+                    });
+                    await wait(cooldown);
+                    continue;
+                }
+
                 if (!response.ok) {
-                    console.error('[BulkDelete] API error:', response.status);
-                    break;
+                    return { error: `Failed to fetch chats (HTTP ${response.status}). Try refreshing ChatGPT.` };
                 }
 
+                retryCount = 0;
                 const data = await response.json();
-
-                let items = [];
-                if (Array.isArray(data)) {
-                    items = data;
-                } else if (data.items && Array.isArray(data.items)) {
-                    items = data.items;
-                }
+                const items = Array.isArray(data)
+                    ? data
+                    : (Array.isArray(data.items) ? data.items : []);
 
                 if (items.length === 0) {
                     hasMore = false;
                     break;
                 }
 
-                allConversations = allConversations.concat(items);
-                console.log('[BulkDelete] Fetched:', allConversations.length, 'conversations');
+                for (const item of items) {
+                    if (item && item.id && !seenIds.has(item.id)) {
+                        seenIds.add(item.id);
+                        allConversations.push({
+                            id: item.id,
+                            title: item.title || 'New chat',
+                            update_time: item.update_time || item.create_time || null
+                        });
+                    }
+                }
 
-                if (data.has_more === false || items.length < limit) {
+                emitProgress({
+                    status: 'fetching',
+                    message: `Loading chats... (${allConversations.length} found)`
+                });
+
+                if (data.has_more === false) {
+                    hasMore = false;
+                } else if (typeof data.total === 'number' && offset + items.length >= data.total) {
                     hasMore = false;
                 } else {
-                    offset += limit;
+                    offset += items.length;
                 }
 
-                await wait(200);
+                await wait(120);
             } catch (error) {
-                console.error('[BulkDelete] Error fetching:', error);
-                hasMore = false;
+                console.error('[BulkDelete] Error fetching conversations:', error);
+                return { error: 'Network error while fetching chats.' };
             }
         }
 
-        return allConversations;
+        return { success: true, conversations: allConversations };
     }
 
     // ===========================================
-    // CHECKBOX MANAGEMENT
+    // SIDEBAR DOM CACHE (O(1) CLEANUP)
     // ===========================================
 
-    function addCheckboxes() {
-        const chatItems = document.querySelectorAll(CHAT_ITEM_SELECTOR);
-        let count = 0;
-
-        chatItems.forEach((item) => {
-            if (item.querySelector('.bulk-delete-checkbox')) return;
-
-            const conversationId = getConversationIdFromElement(item);
-            if (!conversationId) return;
-
-            const checkboxWrapper = document.createElement('div');
-            checkboxWrapper.className = 'bulk-delete-checkbox-wrapper';
-            checkboxWrapper.style.cssText = `
-                position: absolute;
-                left: 4px;
-                top: 50%;
-                transform: translateY(-50%);
-                z-index: 100;
-                display: flex;
-                align-items: center;
-            `;
-
-            const checkbox = document.createElement('input');
-            checkbox.type = 'checkbox';
-            checkbox.className = 'bulk-delete-checkbox';
-            checkbox.dataset.conversationId = conversationId;
-            checkbox.style.cssText = `
-                width: 16px;
-                height: 16px;
-                cursor: pointer;
-                accent-color: #7c4dff;
-                margin: 0;
-            `;
-
-            checkbox.addEventListener('change', (e) => {
-                e.stopPropagation();
-                if (checkbox.checked) {
-                    selectedChats.set(conversationId, item);
-                    item.style.backgroundColor = 'rgba(124, 77, 255, 0.15)';
-                } else {
-                    selectedChats.delete(conversationId);
-                    item.style.backgroundColor = '';
-                }
-            });
-
-            checkbox.addEventListener('click', (e) => {
-                e.stopPropagation();
-                // removed preventDefault to allow manual checking
-            });
-
-            checkboxWrapper.addEventListener('click', (e) => {
-                e.stopPropagation();
-                e.preventDefault();
-                // Allow clicking the wrapper to toggle the checkbox
-                checkbox.checked = !checkbox.checked;
-                checkbox.dispatchEvent(new Event('change'));
-            });
-
-            item.style.position = 'relative';
-            item.style.paddingLeft = '28px';
-
-            checkboxWrapper.appendChild(checkbox);
-            item.insertBefore(checkboxWrapper, item.firstChild);
-            count++;
-        });
-
-        checkboxesVisible = true;
-        return { success: true, count };
-    }
-
-    function removeCheckboxes() {
-        const checkboxes = document.querySelectorAll('.bulk-delete-checkbox-wrapper');
-        checkboxes.forEach(wrapper => {
-            const item = wrapper.parentElement;
-            if (item) {
-                item.style.paddingLeft = '';
-                item.style.backgroundColor = '';
+    function buildSidebarLinkMap() {
+        const map = new Map();
+        const links = document.querySelectorAll('nav a[href*="/c/"], aside a[href*="/c/"], a[href*="/c/"]');
+        links.forEach(link => {
+            const href = link.getAttribute('href') || '';
+            const match = href.match(/\/c\/([a-zA-Z0-9-]+)/);
+            if (match && !map.has(match[1])) {
+                map.set(match[1], link);
             }
-            wrapper.remove();
         });
-
-        selectedChats.clear();
-        checkboxesVisible = false;
-        return { success: true };
+        return map;
     }
 
-    function toggleAllCheckboxes() {
-        const checkboxes = document.querySelectorAll('.bulk-delete-checkbox');
-        const allChecked = Array.from(checkboxes).every(cb => cb.checked);
-
-        checkboxes.forEach(checkbox => {
-            const conversationId = checkbox.dataset.conversationId;
-            const item = checkbox.closest('a');
-
-            if (allChecked) {
-                checkbox.checked = false;
-                selectedChats.delete(conversationId);
-                if (item) item.style.backgroundColor = '';
+    function removeChatFromMap(sidebarMap, conversationId) {
+        const link = sidebarMap.get(conversationId);
+        if (!link) return;
+        sidebarMap.delete(conversationId);
+        try {
+            const listItem = link.closest('li');
+            if (listItem && listItem.querySelectorAll('a[href*="/c/"]').length <= 1) {
+                listItem.remove();
             } else {
-                checkbox.checked = true;
-                if (item) {
-                    selectedChats.set(conversationId, item);
-                    item.style.backgroundColor = 'rgba(124, 77, 255, 0.15)';
-                }
+                link.remove();
             }
-        });
-
-        return { selected: selectedChats.size };
-    }
-
-    function getSelectedCount() {
-        return { count: selectedChats.size };
-    }
-
-    // ===========================================
-    // API OPERATIONS
-    // ===========================================
-
-    async function archiveConversation(conversationId, accessToken) {
-        try {
-            const response = await fetch(`https://chatgpt.com/backend-api/conversation/${conversationId}`, {
-                method: 'PATCH',
-                headers: {
-                    'Content-Type': 'application/json',
-                    'Authorization': `Bearer ${accessToken}`,
-                    'oai-device-id': deviceId || '',
-                    'oai-language': 'en-US'
-                },
-                credentials: 'include',
-                body: JSON.stringify({ is_archived: true })
-            });
-            return { success: response.ok, status: response.status };
-        } catch (error) {
-            return { success: false, status: 0 };
-        }
-    }
-
-    async function deleteConversation(conversationId, accessToken) {
-        try {
-            const response = await fetch(`https://chatgpt.com/backend-api/conversation/${conversationId}`, {
-                method: 'PATCH',
-                headers: {
-                    'Content-Type': 'application/json',
-                    'Authorization': `Bearer ${accessToken}`,
-                    'oai-device-id': deviceId || '',
-                    'oai-language': 'en-US'
-                },
-                credentials: 'include',
-                body: JSON.stringify({ is_visible: false })
-            });
-            return { success: response.ok, status: response.status };
-        } catch (error) {
-            return { success: false, status: 0 };
+        } catch (e) {
+            // Ignore DOM cleanup errors
         }
     }
 
     // ===========================================
-    // BATCH PROCESSING HELPER
+    // BATCHED DELETE / ARCHIVE (10k+ SAFE)
     // ===========================================
 
-    const BATCH_SIZE = 10; // Safe Speed
-    const BATCH_DELAY = 300; // Safe Delay
-    const COOLDOWN_DELAY = 10000; // 10 Seconds Cooldown on 429
+    async function patchConversation(conversationId, accessToken, payload) {
+        try {
+            const response = await fetch(`${BASE_URL}/backend-api/conversation/${conversationId}`, {
+                method: 'PATCH',
+                headers: buildHeaders(accessToken),
+                credentials: 'include',
+                body: JSON.stringify(payload)
+            });
+            return { success: response.ok, status: response.status, response };
+        } catch (error) {
+            return { success: false, status: 0, response: null };
+        }
+    }
 
-    async function processInBatches(items, batchSize, asyncFn, onProgress) {
+    async function processIdsInBatches(ids, mode) {
+        if (jobState.active) {
+            return { error: 'Another operation is already running.' };
+        }
+        if (!Array.isArray(ids) || ids.length === 0) {
+            return { error: 'No chats selected.' };
+        }
+
+        let accessToken = await getAccessToken();
+        if (!accessToken) {
+            return { error: 'Could not get access token. Please refresh ChatGPT.' };
+        }
+
+        const actionName = mode === 'archive' ? 'archiveSelected' : 'deleteSelected';
+        const payload = mode === 'archive' ? { is_archived: true } : { is_visible: false };
+        const total = ids.length;
+        const sidebarMap = buildSidebarLinkMap();
+
+        let batchSize = INITIAL_BATCH_SIZE;
+        let currentDelay = BATCH_DELAY;
         let success = 0;
         let processed = 0;
-        const total = items.length;
-        const failedItems = [];
+        let consecutive429 = 0;
+        const succeededIds = [];
+        let pendingIds = ids.slice();
 
-        for (let i = 0; i < total; i += batchSize) {
-            const batch = items.slice(i, i + batchSize);
-            const promises = batch.map(item => asyncFn(item));
+        emitProgress({
+            active: true,
+            action: actionName,
+            status: 'processing',
+            message: `Starting (${total} chats)...`,
+            processed: 0,
+            total,
+            success: 0,
+            failed: 0,
+            percent: 0,
+            cancelled: false,
+            succeededIds: []
+        });
 
-            const results = await Promise.all(promises);
-            let rateLimitHit = false;
+        try {
+            for (let pass = 0; pass < 3 && pendingIds.length > 0; pass++) {
+                const isRetry = pass > 0;
+                const nextRetryIds = [];
 
-            results.forEach((result, index) => {
-                processed++;
-                if (result.success) {
-                    success++;
-                } else {
-                    failedItems.push(batch[index]);
-                    if (result.status === 429) {
-                        rateLimitHit = true;
+                for (let i = 0; i < pendingIds.length; i += batchSize) {
+                    if (jobState.cancelled) {
+                        return {
+                            cancelled: true,
+                            success,
+                            failed: total - success,
+                            total,
+                            processed,
+                            succeededIds
+                        };
                     }
-                }
-            });
 
-            if (onProgress) {
-                onProgress(processed, success, total);
-            }
+                    const batch = pendingIds.slice(i, i + batchSize);
+                    const results = await Promise.all(
+                        batch.map(id => patchConversation(id, accessToken, payload))
+                    );
 
-            if (rateLimitHit) {
-                console.warn('[BulkDelete] Rate limit (429) hit. Pausing for 10 seconds...');
-                await wait(COOLDOWN_DELAY);
-            } else {
-                await wait(BATCH_DELAY);
-            }
-        }
+                    let rateLimitResponse = null;
+                    let saw401 = false;
 
-        return { success, failed: total - success, total, processed, failedItems };
-    }
+                    results.forEach((res, idx) => {
+                        const id = batch[idx];
+                        if (!isRetry) processed++;
 
-    // ===========================================
-    // BULK OPERATIONS (Selected Chats)
-    // ===========================================
-
-    async function bulkArchive() {
-        if (isProcessing) return { error: 'Already processing' };
-        isProcessing = true;
-
-        const accessToken = await getAccessToken();
-        if (!accessToken) {
-            isProcessing = false;
-            return { success: 0, failed: selectedChats.size, total: selectedChats.size, processed: 0, error: 'Could not get access token' };
-        }
-
-        const conversations = Array.from(selectedChats.entries()); // [[id, element], [id, element]...]
-
-        const { success, processed } = await processInBatches(
-            conversations,
-            BATCH_SIZE,
-            async ([conversationId, element]) => {
-                const result = await archiveConversation(conversationId, accessToken);
-                if (result.success) {
-                    if (element && element.parentElement) {
-                        element.parentElement.remove();
-                    }
-                    selectedChats.delete(conversationId);
-                }
-                return result;
-            }
-        );
-
-        isProcessing = false;
-        return { success, failed: conversations.length - success, total: conversations.length, processed };
-    }
-
-    async function bulkDelete() {
-        if (isProcessing) return { error: 'Already processing' };
-        isProcessing = true;
-
-        const accessToken = await getAccessToken();
-        if (!accessToken) {
-            isProcessing = false;
-            return { success: 0, failed: selectedChats.size, total: selectedChats.size, processed: 0, error: 'Could not get access token' };
-        }
-
-        const conversations = Array.from(selectedChats.entries());
-
-        const { success, processed } = await processInBatches(
-            conversations,
-            BATCH_SIZE,
-            async ([conversationId, element]) => {
-                const result = await deleteConversation(conversationId, accessToken);
-                if (result.success) {
-                    if (element && element.parentElement) {
-                        element.parentElement.remove();
-                    }
-                    selectedChats.delete(conversationId);
-                }
-                return result;
-            }
-        );
-
-        isProcessing = false;
-        return { success, failed: conversations.length - success, total: conversations.length, processed };
-    }
-
-    // ===========================================
-    // LIFETIME OPERATIONS WITH PROGRESS CALLBACK
-    // ===========================================
-
-    async function deleteAllConversations(sendProgress) {
-        if (isProcessing) return { error: 'Already processing' };
-        isProcessing = true;
-
-        const accessToken = await getAccessToken();
-        if (!accessToken) {
-            isProcessing = false;
-            return { success: 0, failed: 0, total: 0, error: 'Could not get access token. Please refresh the page.' };
-        }
-
-        // Send initial progress
-        if (sendProgress) sendProgress({ status: 'fetching', message: 'Fetching all conversations...' });
-
-        const allConversations = await fetchAllConversations(accessToken);
-        const total = allConversations.length;
-
-        if (total === 0) {
-            isProcessing = false;
-            return { success: 0, failed: 0, total: 0, error: 'No conversations found' };
-        }
-
-        const { success, processed } = await processInBatches(
-            allConversations,
-            BATCH_SIZE,
-            async (conversation) => {
-                return await deleteConversation(conversation.id, accessToken);
-            },
-            (processedCount, successCount, totalCount) => {
-                if (sendProgress) {
-                    sendProgress({
-                        status: 'processing',
-                        processed: processedCount,
-                        total: totalCount,
-                        success: successCount,
-                        percent: Math.round((processedCount / totalCount) * 100)
+                        if (res.success) {
+                            success++;
+                            succeededIds.push(id);
+                            removeChatFromMap(sidebarMap, id);
+                        } else {
+                            nextRetryIds.push(id);
+                            if (res.status === 429 && !rateLimitResponse) {
+                                rateLimitResponse = res.response;
+                            }
+                            if (res.status === 401) {
+                                saw401 = true;
+                            }
+                        }
                     });
+
+                    // Refresh token if 401 occurred
+                    if (saw401) {
+                        const refreshed = await getAccessToken();
+                        if (refreshed) {
+                            accessToken = refreshed;
+                        }
+                    }
+
+                    const currentProcessed = Math.min(processed, total);
+                    const percent = Math.round((currentProcessed / total) * 100);
+
+                    if (rateLimitResponse) {
+                        consecutive429++;
+                        batchSize = Math.max(MIN_BATCH_SIZE, Math.floor(batchSize / 2));
+                        currentDelay = Math.min(800, currentDelay + 150);
+                        const cooldown = getRetryAfterMs(rateLimitResponse, consecutive429);
+
+                        emitProgress({
+                            status: 'processing',
+                            message: `Rate limited — pausing ${Math.round(cooldown / 1000)}s (${currentProcessed}/${total})...`,
+                            processed: currentProcessed,
+                            total,
+                            success,
+                            percent
+                        });
+                        await wait(cooldown);
+                    } else {
+                        consecutive429 = 0;
+                        emitProgress({
+                            status: 'processing',
+                            message: `${mode === 'archive' ? 'Archiving' : 'Deleting'} ${currentProcessed}/${total} (${percent}%)...`,
+                            processed: currentProcessed,
+                            total,
+                            success,
+                            percent
+                        });
+                        await wait(currentDelay);
+                    }
+                }
+
+                pendingIds = nextRetryIds;
+                if (pendingIds.length > 0 && pass < 2) {
+                    await wait(2000);
                 }
             }
-        );
 
-        // Refresh the page
-        if (success > 0) {
-            if (sendProgress) sendProgress({ status: 'refreshing', success, total });
-            setTimeout(() => window.location.reload(), 1500);
+            return {
+                success,
+                failed: total - success,
+                total,
+                processed: total,
+                succeededIds
+            };
+        } finally {
+            jobState.active = false;
         }
-
-        isProcessing = false;
-        return { success, failed: total - success, total, processed };
-    }
-
-    async function archiveAllConversations(sendProgress) {
-        if (isProcessing) return { error: 'Already processing' };
-        isProcessing = true;
-
-        const accessToken = await getAccessToken();
-        if (!accessToken) {
-            isProcessing = false;
-            return { success: 0, failed: 0, total: 0, error: 'Could not get access token. Please refresh the page.' };
-        }
-
-        if (sendProgress) sendProgress({ status: 'fetching', message: 'Fetching all conversations...' });
-
-        const allConversations = await fetchAllConversations(accessToken);
-        const total = allConversations.length;
-
-        if (total === 0) {
-            isProcessing = false;
-            return { success: 0, failed: 0, total: 0, error: 'No conversations found' };
-        }
-
-        const { success, processed } = await processInBatches(
-            allConversations,
-            BATCH_SIZE,
-            async (conversation) => {
-                return await archiveConversation(conversation.id, accessToken);
-            },
-            (processedCount, successCount, totalCount) => {
-                if (sendProgress) {
-                    sendProgress({
-                        status: 'processing',
-                        processed: processedCount,
-                        total: totalCount,
-                        success: successCount,
-                        percent: Math.round((processedCount / totalCount) * 100)
-                    });
-                }
-            }
-        );
-
-        if (success > 0) {
-            if (sendProgress) sendProgress({ status: 'refreshing', success, total });
-            setTimeout(() => window.location.reload(), 1500);
-        }
-
-        isProcessing = false;
-        return { success, failed: total - success, total, processed };
     }
 
     // ===========================================
-    // MESSAGE LISTENER WITH LONG-LIVED CONNECTION
+    // MESSAGE & PORT LISTENERS
     // ===========================================
 
     chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
-        console.log('[BulkDelete] Received:', request.action);
-
-        switch (request.action) {
-            case 'addCheckboxes':
-                sendResponse(addCheckboxes());
-                break;
-            case 'removeCheckboxes':
-                sendResponse(removeCheckboxes());
-                break;
-            case 'toggleAll':
-                sendResponse(toggleAllCheckboxes());
-                break;
-            case 'getSelectedCount':
-                sendResponse(getSelectedCount());
-                break;
-            case 'bulkArchive':
-                bulkArchive().then(sendResponse);
-                return true;
-            case 'bulkDelete':
-                bulkDelete().then(sendResponse);
-                return true;
-            case 'deleteAll':
-                deleteAllConversations(null).then(sendResponse);
-                return true;
-            case 'archiveAll':
-                archiveAllConversations(null).then(sendResponse);
-                return true;
-            default:
-                sendResponse({ error: 'Unknown action' });
+        if (request.action === 'getJobState') {
+            sendResponse({ ...jobState });
+        } else if (request.action === 'cancelJob') {
+            jobState.cancelled = true;
+            sendResponse({ ok: true });
         }
     });
 
-    // Long-lived connection for progress updates
     chrome.runtime.onConnect.addListener((port) => {
-        if (port.name === 'lifetime-operation') {
-            port.onMessage.addListener(async (msg) => {
-                const sendProgress = (data) => {
-                    try {
-                        port.postMessage(data);
-                    } catch (e) {
-                        console.log('[BulkDelete] Port closed');
-                    }
-                };
+        if (port.name !== 'bulk-delete-port') return;
+        activePort = port;
 
-                if (msg.action === 'deleteAll') {
-                    const result = await deleteAllConversations(sendProgress);
-                    sendProgress({ status: 'complete', ...result });
-                } else if (msg.action === 'archiveAll') {
-                    const result = await archiveAllConversations(sendProgress);
-                    sendProgress({ status: 'complete', ...result });
-                }
-            });
-        }
-    });
-
-    // ===========================================
-    // MUTATION OBSERVER & STYLES
-    // ===========================================
-
-    function setupObserver() {
-        const nav = document.querySelector(SIDEBAR_SELECTOR);
-        if (!nav) return;
-
-        const observer = new MutationObserver(() => {
-            if (checkboxesVisible) {
-                setTimeout(() => addCheckboxes(), 500);
-            }
+        port.onDisconnect.addListener(() => {
+            if (activePort === port) activePort = null;
         });
 
-        observer.observe(nav, { childList: true, subtree: true });
-    }
+        port.onMessage.addListener(async (msg) => {
+            if (msg.action === 'fetchAll') {
+                jobState.active = true;
+                jobState.cancelled = false;
+                let result;
+                try {
+                    result = await fetchAllConversations();
+                } finally {
+                    jobState.active = false;
+                }
+                emitProgress({ status: 'complete', action: 'fetchAll', ...result });
+            } else if (msg.action === 'deleteSelected') {
+                const result = await processIdsInBatches(msg.ids, 'delete');
+                emitProgress({ status: 'complete', action: 'deleteSelected', ...result });
+            } else if (msg.action === 'archiveSelected') {
+                const result = await processIdsInBatches(msg.ids, 'archive');
+                emitProgress({ status: 'complete', action: 'archiveSelected', ...result });
+            }
+        });
+    });
 
-    if (document.readyState === 'loading') {
-        document.addEventListener('DOMContentLoaded', setupObserver);
-    } else {
-        setupObserver();
-    }
-
-    const style = document.createElement('style');
-    style.textContent = `
-        .bulk-delete-checkbox:focus {
-            outline: 2px solid #7c4dff;
-            outline-offset: 2px;
-        }
-        .bulk-delete-checkbox-wrapper:hover {
-            background: rgba(124, 77, 255, 0.1);
-            border-radius: 4px;
-        }
-    `;
-    document.head.appendChild(style);
-
-    console.log('[BulkDelete] ChatGPT Bulk Delete v2.3 loaded - with real-time progress');
+    console.log('[BulkDelete] ChatGPT Bulk Delete v3.1.0 loaded (10k+ optimized)');
 })();
